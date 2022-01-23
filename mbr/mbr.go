@@ -4,35 +4,6 @@ import (
 	"os"
 )
 
-const (
-	MBRsize = 512
-
-	BootstrapCodeArea1Size = 218
-	BootstrapCodeArea1Offset = 0
-	BootstrapCodeArea2Size = 216
-	BootstrapCodeArea2Offset = 224
-	LegacyBootstrapCodeAreaOffset = 0
-	LegacyBootstrapCodeAreaSize = 446
-
-	DiskTimestampOffset = 218
-	DiskTimestampSize = 6
-	DiskTimeStampSecondsOffset = 221
-	DiskTimeStampSecondsSize = 1
-	DiskTimeStampMinutesOffset = 222
-	DiskTimeStampMinutesSize = 1
-	DiskTimeStampHoursOffset = 223
-	DiskTimeStampHoursSize = 1
-
-	PartitionEntrySize = 16
-	PartitionEntry1Offset = 446
-	PartitionEntry2Offset = 462
-	PartitionEntry3Offset = 478
-	PartitionEntry4Offset = 494
-
-	BootSignatureSize = 2
-	BootSignatureOffset = 510
-)
-
 type MBR struct {
 	BootstrapCode []byte
 	TimeStamp string
@@ -42,8 +13,11 @@ type MBR struct {
 }
 
 type Partition struct {
+	Position int
 	Status string
+	StatusCode int
 	Type string
+	TypeCode int
 	Sectors int
 }
 
@@ -52,7 +26,7 @@ type DiskSignature struct {
 	Signature int32
 }
 
-func DumpMBR(f *os.File) ([]byte, error) {
+func Dump(f *os.File) ([]byte, error) {
 	mbr := make([]byte, MBRsize)
 	_, err := f.Read(mbr)
 	if err != nil {
@@ -61,14 +35,80 @@ func DumpMBR(f *os.File) ([]byte, error) {
 	return mbr, nil
 }
 
-func GetMBR(mbr []byte) error {
+func ParseStatus(extract byte) string {
+	var status string
+	if extract == 128 {
+		status = "bootable"
+	} else if extract > 0 && extract < 128 {
+		status = "invalid"
+	} else {
+		status = "inactive"
+	}
+	return status
+}
+
+func ParsePartition(entry []byte) (Partition, error) {
+	var partition Partition
+	if len(entry) < PartitionEntrySize {
+		return partition, fmt.Errorf("input does not contain a valid partition entry")
+	}
+	partition.StatusCode = int(entry[0])
+	partition.Status = ParseStatus(entry[0])
+
+	partition.TypeCode = int(entry[4])
+
+
+	return partition, nil
+}
+
+func ParsePartitions(entries []byte) ([]Partition, error) {
+	if len(entries) < PartitionEntrySize * 4 {
+		return make([]Partition, 0), fmt.Errorf("input does not contain all 4 partition entries")
+	}
+	partitions := make([]Partition, 0)
+
+	part1, err := ParsePartition(entries[0:16])
+	if err != nil {
+		return partitions, fmt.Errorf("Could not parse partition entry 1: %s", err)
+	}
+	part1.Position = 1
+	partitions = append(partitions, part1)
+
+	part2, err := ParsePartition(entries[16:32])
+	if err != nil {
+		return partitions, fmt.Errorf("Could not parse partition entry 2: %s", err)
+	}
+	part2.Position = 2
+	partitions = append(partitions, part2)
+
+	part3, err := ParsePartition(entries[32:48])
+	if err != nil {
+		return partitions, fmt.Errorf("Could not parse partition entry 3: %s", err)
+	}
+	part3.Position = 3
+	partitions = append(partitions, part3)
+	
+	part4, err := ParsePartition(entries[48:64])
+	if err != nil {
+		return partitions, fmt.Errorf("Could not parse partition entry 4: %s", err)
+	}
+	part4.Position = 4
+	partitions = append(partitions, part4)
+
+	return partitions, nil
+}
+
+func Parse(mbr []byte) (MBR, error) {
+	var MBR MBR
 	if len(mbr) < MBRsize {
-		return fmt.Errorf("input does not contain full mbr")
+		return MBR, fmt.Errorf("input does not contain full mbr")
 	}
 
-	fmt.Println(mbr[446:462]) // part entry 1
-	fmt.Println(mbr[446]) // status  --  if 128 == bootable, if 0 == inactive
-	fmt.Println(mbr[450]) // partition type https://en.wikipedia.org/wiki/Partition_type
+	partitions, err := ParsePartitions(mbr[446:510])
+	if err != nil {
+		return MBR, fmt.Errorf("Could not parse partition entries: %s", err)
+	}
+	MBR.Partitions = partitions
 
-	return nil
+	return MBR, nil
 }
